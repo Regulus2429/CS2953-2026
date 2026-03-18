@@ -1,0 +1,27 @@
+3.14  李徐砚
+环境配置：
+本人电脑是 Windows 系统，使用的是 Ubuntu 20.04 + wsl，由于 Ubuntu 和 wsl 在之前的项目已经使用过，因此无需再次配置。遇到的第一个问题是在 cd CS2953-2024 && make clean 时报错，原因是没有适配 riscv64 架构的GCC编译器和binutils，而xv6依赖这套工具链，安装即可，命令是 sudo apt install gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu  。此外，xv6 运行需要 QEMU 模拟器，如果没有则会在 make qemu 时报错，通过命令 sudo apt install qemu-system-riscv64 安装后就不会再报错了。至此环境配置就完成了。
+
+sleep: 
+sleep 的实现过程没有遇到问题。实现建议是参考 user/rm.c ，因为 sleep.c 的命令行参数传递和错误信息打印完全可以照搬。其余的在课件 Hints 中已经给出，不再赘述。
+写完后建议直接运行 ./grade-lab-util-syscall 看能否通过sleep测试部分，不必完成整个lab后再测试。
+
+pingpong: 
+pingpong 实现需要用到的函数在 Hints 中给出，建议参考 https://pdos.csail.mit.edu/6.828/2022/xv6/book-riscv-rev3.pdf 中的 1.1 ~ 1.3 节代码，介绍了如何使用这些函数，个人觉得非常有用。
+还需要注意的是父进程需要用 wait(0) 回收子进程，避免僵尸进程占用资源，同时保证指令的执行顺序。最后，管道可以看作一种特殊的文件，不需要的管道最好及时关闭。
+写完后建议当场测试，反复执行 pingpong 观察会不会有时候只输出一行信息(本人亲历)，应该是忘记写wait导致的。
+
+trace: 
+Hints 中给出的步骤整体上是正确的，建议按着这个顺序来。需要补充的是，kernel/syscall.h 中已包含 SYS_trace 不要重复添加。
+sys_trace 实现可以参考 kernel/sysproc.c 中的其他sys函数，需要用到的函数基本都包含在内了。
+然后 Hints 中没有提到的是，kernel/syscall.c 中的 Prototypes 中也要添加 sys_trace, 否则用户态 - 内核态 链路未打通，系统找不到 trace 实现, 运行时会报错.
+最后，如果修改 syscall 函数时不知道如何访问所需信息，看看 syscall 中注释。
+
+sysinfo: 
+仍然建议按照Hints顺序实现。前期处理与 trace 一样，注意还要在 kernel/syscall.c  中 prototypes、syscalls中加入 sysinfo 构建链路，这是本人 debug 较长时间的问题。
+kernel/kalloc.c 中计算可用内存时，建议参考 kalloc()函数的实现，看看它是怎么访问可用空间的。
+kernel/proc.c 中遍历进程的方式建议参考 procdump() 的，for 循环可以照搬。
+添加完上面两个函数后需要在 kernel/defs.h 中添加上二者的声明，不然 kernel/sysproc.c 无法使用这两个函数，编译时报错。
+
+
+上面就是本人遇到的主要问题。总的来说，仔细读 Hints，勤测试，多参考一下别的函数的实现方式。
