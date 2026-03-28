@@ -144,6 +144,20 @@ found:
     return 0;
   }
 
+  // 给 prev_trapframe 分配空间
+  if ((p->prev_trapframe = (struct trapframe *)kalloc()) == 0)
+  {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // 初始化与 alarm 相关的参数
+  p->alarm_interval = 0;
+  p->alarm_handler = 0;
+  p->alarm_ticks = 0;
+  p->is_timer_going = 0;
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -161,6 +175,8 @@ freeproc(struct proc *p)
 {
   if (p->trapframe)
     kfree((void *)p->trapframe);
+  if (p->prev_trapframe) // 释放 prev_trapframe
+    kfree((void *)p->prev_trapframe);
   p->trapframe = 0;
   if (p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);

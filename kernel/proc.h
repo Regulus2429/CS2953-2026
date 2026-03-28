@@ -98,12 +98,17 @@ struct proc
   struct spinlock lock;
 
   // p->lock must be held when using these:
-  enum procstate state; // Process state
-  void *chan;           // If non-zero, sleeping on chan
-  int killed;           // If non-zero, have been killed
-  int xstate;           // Exit status to be returned to parent's wait
-  int pid;              // Process ID
-  uint64 mask;          // trace mask
+  enum procstate state;             // Process state
+  void *chan;                       // If non-zero, sleeping on chan
+  int killed;                       // If non-zero, have been killed
+  int xstate;                       // Exit status to be returned to parent's wait
+  int pid;                          // Process ID
+  uint64 mask;                      // trace mask
+  int alarm_interval;               // alarm interval
+  void (*alarm_handler)();          // pointer to the handler function
+  int alarm_ticks;                  // ticks have passed since the last call to handler
+  int is_timer_going;               // 0 if is not running
+  struct trapframe *prev_trapframe; // copy trapframe before timer runs
 
   // wait_lock must be held when using this:
   struct proc *parent; // Parent process

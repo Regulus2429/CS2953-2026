@@ -59,6 +59,7 @@ sys_sleep(void)
   acquire(&tickslock);
   ticks0 = ticks;
 #ifdef LAB_TRAPS
+  backtrace();
 #endif
   while (ticks - ticks0 < n)
   {
@@ -124,4 +125,27 @@ sys_sysinfo(void)
   if (copyout(p->pagetable, addr, (char *)&info, sizeof(info)) < 0)
     return -1;
   return 0;
+}
+
+uint64
+sys_sigalarm(void)
+{
+  int interval;
+  uint64 handler;
+  argint(0, &interval); // 读入函数所需参数
+  argaddr(1, &handler);
+
+  struct proc *p = myproc();
+  p->alarm_interval = interval;
+  p->alarm_handler = (void (*)())handler; // 注意类型需要转换成函数指针
+  return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+  struct proc *p = myproc();
+  *(p->trapframe) = *(p->prev_trapframe);
+  p->is_timer_going = 0; // 结束 timer
+  return p->trapframe->a0;
 }
