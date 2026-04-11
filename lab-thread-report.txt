@@ -1,0 +1,38 @@
+4.11  李徐砚
+uthread:
+按照文档中的要求，需要修改的只有 thread_create()，thread_schedule()，和 thread_switch (汇编)。
+thread_create() 要求是“给线程分配栈空间，初始化 ra 和 sp”，所以我们需要将返回地址压入栈中 (注意栈的地址是从高到低的)。 此外，由于线程切换时需要用到 ra 和 sp，所以可以将它们放到 struct thread 中保存。
+thread_schedule() 所需的操作仅是调用 thread_switch() 切换进程，没什么问题。
+然后 thread_switch() 切换进程时需要修改的内容为 ra、sp 和 callee-saved registers(如果不修改 callee-saved registers，运行 uthread 时会在切换到 thread_b 之后不再切换，最终也不会停止)。
+传参的方式很多，个人觉得通过一个 struct context 传参比较方便（不用传一堆参数），其中 context 的成员包含了这些需要修改的内容。
+这里汇编代码的指令上网查一下就好了，操作就是保存要被切走的线程的上下文，载入切过去的新线程的上下文。由于传参传的是结构体指针，只需将 a0 和 a1不断加8就可以访问不同的成员了。
+
+pthread:
+这个任务的要求就是让 put() 和 get() 支持多线程，需要用到的 pthread calls 在 PDF 中已经给出。
+导致 missing 的原因在 answers-thread.txt 中给出，解决方案就是给共享资源上锁。注意到两个线程相互影响的前提是它们对应的是同一个桶（如果桶不一样，访问的就是不同是资源），所以没必要在一个线程访问时阻止其他所有线程，
+而是只阻止与他在同一个桶的线程即可。具体技巧就是，给每个桶设置一个锁，在线程访问时仅取它所在桶的锁，这样就可以提高多线程下的运行速度。
+由于锁需要init，我在实现的时候曾经在 put 和 get 中每次上锁前都 init 一次，但是这样的问题在于如果一个锁已经被取走，在别的线程中再对它 init 就会出错。我的解决方案是再添加一个数组来记录每个锁是否被初始化过，
+避免重复的 init 操作。
+
+barrier:
+任务要求比较明确，但由于我第一次接触条件变量以及相关的互斥锁使用，所以debug时间较长。对于函数的使用，我参考了 https://cloud.tencent.com/developer/article/2636421 ，个人觉得讲的还行，能看懂。
+我遇到的一个问题是，在 pthread_cond_wait 所处的 while 循环中，我最早使用的条件是 while (nthread > bstate.nthread) 。但是在最后一个线程调用 barrier 之后，我们又需要将 bstate.nthread 重置为0，
+导致这个循环条件居然又成立了！那除了最后那个线程，前面的线程都无法从while循环中跳出，陷入死循环。
+解决方案是：将循环条件改为 int cur_round = bstate.round;  while (cur_round == bstate.round) 正确性显而易见，也不会受到 bstate.nthread 重置的影响。
+别的关于锁的问题不好一一描述，但是我觉得可行的解决方案是假想两个线程，一步步按照你写的程序执行，检查是不是两个线程都能正常退出，会不会产生死锁。
+
+个人觉得这次 lab 主要是 barrier 比较难，建议多测试。
+
+
+
+answers-thread.txt：
+以 put 为例：
+两个线程 t1 和 t2，各执行一个 put 操作，假设两个 put 传入的参数 key 对应同一个桶 (也就是 key1 % NBUCKET == key2 % NBUCKET).事件步骤如下：
+(1) t1 计算 i = key % NBUCKET，遍历链表，发现 key 不存在，调用 insert 后执行完第一行 (struct entry *e = malloc(sizeof(struct entry));)
+(2) t2 计算 i = key % NBUCKET，遍历链表，发现 key 不存在，调用 insert 后执行完第一行。
+(3) t1 继续执行完 insert
+(4) t2 继续执行完 insert
+最终 t1 插入的节点被覆盖掉了。
+explanation:
+t2 中 insert(key, value, &table[i], table[i]) 如果在 table[i] 被 t1 修改之前就传入了参数，那么最后这个参数 table[i] 和 t1 中的 table[i] 就是同一个指针，
+t2 加入的头节点的 next 也就是这个table[i], 从而跳过了 t1 加入的头节点，导致 missing.
