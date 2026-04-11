@@ -3,24 +3,42 @@
 #include "user/user.h"
 
 /* Possible states of a thread: */
-#define FREE        0x0
-#define RUNNING     0x1
-#define RUNNABLE    0x2
+#define FREE 0x0
+#define RUNNING 0x1
+#define RUNNABLE 0x2
 
-#define STACK_SIZE  8192
-#define MAX_THREAD  4
+#define STACK_SIZE 8192
+#define MAX_THREAD 4
 
+struct context
+{
+  uint64 ra; // 返回地址
+  uint64 sp; // 栈指针
+  uint64 s0; // callee-saved registers
+  uint64 s1;
+  uint64 s2;
+  uint64 s3;
+  uint64 s4;
+  uint64 s5;
+  uint64 s6;
+  uint64 s7;
+  uint64 s8;
+  uint64 s9;
+  uint64 s10;
+  uint64 s11;
+};
 
-struct thread {
-  char       stack[STACK_SIZE]; /* the thread's stack */
-  int        state;             /* FREE, RUNNING, RUNNABLE */
+struct thread
+{
+  char stack[STACK_SIZE]; /* the thread's stack */
+  int state;              /* FREE, RUNNING, RUNNABLE */
+  struct context ctx;     /* 线程上下文,包括返回地址、栈指针和被调用者保存的寄存器 */
 };
 struct thread all_thread[MAX_THREAD];
-struct thread *current_thread;
+struct thread *current_thread; /* the currently running thread */
 extern void thread_switch(uint64, uint64);
-              
-void 
-thread_init(void)
+
+void thread_init(void)
 {
   // main() is thread 0, which will make the first invocation to
   // thread_schedule(). It needs a stack so that the first thread_switch() can
@@ -29,30 +47,34 @@ thread_init(void)
   current_thread->state = RUNNING;
 }
 
-void 
-thread_schedule(void)
+// 线程调度器，负责从就绪队列中选择下一个要运行的线程，并完成线程切换
+void thread_schedule(void)
 {
   struct thread *t, *next_thread;
 
   /* Find another runnable thread. */
   next_thread = 0;
   t = current_thread + 1;
-  for(int i = 0; i < MAX_THREAD; i++){
-    if(t >= all_thread + MAX_THREAD)
+  for (int i = 0; i < MAX_THREAD; i++)
+  {
+    if (t >= all_thread + MAX_THREAD)
       t = all_thread;
-    if(t->state == RUNNABLE) {
+    if (t->state == RUNNABLE)
+    {
       next_thread = t;
       break;
     }
     t = t + 1;
   }
 
-  if (next_thread == 0) {
+  if (next_thread == 0)
+  {
     printf("thread_schedule: no runnable threads\n");
     exit(-1);
   }
 
-  if (current_thread != next_thread) {         /* switch threads?  */
+  if (current_thread != next_thread)
+  { /* switch threads?  */
     next_thread->state = RUNNING;
     t = current_thread;
     current_thread = next_thread;
@@ -60,42 +82,53 @@ thread_schedule(void)
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
-  } else
+    thread_switch((uint64)&t->ctx, (uint64)&next_thread->ctx);
+  }
+  else
     next_thread = 0;
 }
 
-void 
-thread_create(void (*func)())
+// 初始化一个空闲线程，将其标记为就绪状态
+void thread_create(void (*func)())
 {
   struct thread *t;
 
-  for (t = all_thread; t < all_thread + MAX_THREAD; t++) {
-    if (t->state == FREE) break;
+  for (t = all_thread; t < all_thread + MAX_THREAD; t++)
+  {
+    if (t->state == FREE)
+      break;
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+  // 给线程分配栈空间，初始化 ra 和 sp
+  uint64 sp = (uint64)(t->stack + STACK_SIZE);
+  sp &= ~0xf; // 16 字节对齐
+
+  sp -= sizeof(uint64);
+  *(uint64 *)sp = (uint64)func; // 返回地址压入栈中
+  t->ctx.ra = (uint64)func;
+  t->ctx.sp = sp;
 }
 
-void 
-thread_yield(void)
+void thread_yield(void)
 {
   current_thread->state = RUNNABLE;
   thread_schedule();
 }
 
-volatile int a_started, b_started, c_started;
-volatile int a_n, b_n, c_n;
+volatile int a_started, b_started, c_started; // 标记线程 a/b/c 是否已启动，用于线程间同步
+volatile int a_n, b_n, c_n;                   // 记录线程 a/b/c 各自循环执行的次数
 
-void 
-thread_a(void)
+void thread_a(void)
 {
   int i;
   printf("thread_a started\n");
   a_started = 1;
-  while(b_started == 0 || c_started == 0)
+  while (b_started == 0 || c_started == 0)
     thread_yield();
-  
-  for (i = 0; i < 100; i++) {
+
+  for (i = 0; i < 100; i++)
+  {
     printf("thread_a %d\n", i);
     a_n += 1;
     thread_yield();
@@ -106,16 +139,16 @@ thread_a(void)
   thread_schedule();
 }
 
-void 
-thread_b(void)
+void thread_b(void)
 {
   int i;
   printf("thread_b started\n");
   b_started = 1;
-  while(a_started == 0 || c_started == 0)
+  while (a_started == 0 || c_started == 0)
     thread_yield();
-  
-  for (i = 0; i < 100; i++) {
+
+  for (i = 0; i < 100; i++)
+  {
     printf("thread_b %d\n", i);
     b_n += 1;
     thread_yield();
@@ -126,16 +159,16 @@ thread_b(void)
   thread_schedule();
 }
 
-void 
-thread_c(void)
+void thread_c(void)
 {
   int i;
   printf("thread_c started\n");
   c_started = 1;
-  while(a_started == 0 || b_started == 0)
+  while (a_started == 0 || b_started == 0)
     thread_yield();
-  
-  for (i = 0; i < 100; i++) {
+
+  for (i = 0; i < 100; i++)
+  {
     printf("thread_c %d\n", i);
     c_n += 1;
     thread_yield();
@@ -146,8 +179,7 @@ thread_c(void)
   thread_schedule();
 }
 
-int 
-main(int argc, char *argv[]) 
+int main(int argc, char *argv[])
 {
   a_started = b_started = c_started = 0;
   a_n = b_n = c_n = 0;
