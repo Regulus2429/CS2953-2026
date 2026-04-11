@@ -1,1 +1,3 @@
-LAB=syscall
+# LAB=syscall
+# LAB=traps
+LAB=thread
