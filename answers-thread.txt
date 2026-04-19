@@ -1,0 +1,11 @@
+4.11 李徐砚
+以 put 为例：
+两个线程 t1 和 t2，各执行一个 put 操作，假设两个 put 传入的参数 key 对应同一个桶 (也就是 key1 % NBUCKET == key2 % NBUCKET).事件步骤如下：
+(1) t1 计算 i = key % NBUCKET，遍历链表，发现 key 不存在，调用 insert 后执行完第一行 (struct entry *e = malloc(sizeof(struct entry));)
+(2) t2 计算 i = key % NBUCKET，遍历链表，发现 key 不存在，调用 insert 后执行完第一行。
+(3) t1 继续执行完 insert
+(4) t2 继续执行完 insert
+最终 t1 插入的节点被覆盖掉了。
+explanation:
+t2 中 insert(key, value, &table[i], table[i]) 如果在 table[i] 被 t1 修改之前就传入了参数，那么最后这个参数 table[i] 和 t1 中的 table[i] 就是同一个指针，
+t2 加入的头节点的 next 也就是这个table[i], 从而跳过了 t1 加入的头节点，导致 missing.
