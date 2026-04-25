@@ -23,11 +23,16 @@ struct
 {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+} kmem[NCPU]; // 修改为数值，每个 CPU 各一个
 
 void kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  // 对每个 CPU 的锁初始化
+  for (int i = 0; i < NCPU; ++i)
+  {
+    initlock(&kmem[i].lock, "kmem");
+  }
+  // initlock(&kmem.lock, "kmem");
   freerange(end, (void *)PHYSTOP);
 }
 
@@ -55,10 +60,15 @@ void kfree(void *pa)
 
   r = (struct run *)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();
+  int id = cpuid();
+
+  acquire(&kmem[id].lock);
+  r->next = kmem[id].freelist;
+  kmem[id].freelist = r;
+  release(&kmem[id].lock);
+
+  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -69,14 +79,68 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
+  push_off();
+  int id = cpuid();
+
+  acquire(&kmem[id].lock);
+  r = kmem[id].freelist;
   if (r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+    kmem[id].freelist = r->next;
+  release(&kmem[id].lock);
 
   if (r)
     memset((char *)r, 5, PGSIZE); // fill with junk
+  else
+  {
+    // 尝试别的 cpu 的freelist
+    for (int i = 0; i < NCPU; ++i)
+    {
+      if (i == id)
+        continue;
+
+      acquire(&kmem[i].lock);
+      if (kmem[i].freelist)
+      {
+        // 每次只取一页
+        // r = kmem[i].freelist;
+        // kmem[i].freelist = r->next;
+        // memset((char *)r, 5, PGSIZE); // fill with junk
+
+        // 每次取多页
+        r = kmem[i].freelist;
+        struct run *tail = r;
+        int steal_count = 1;
+        while (steal_count < 64 && tail->next)
+        {
+          tail = tail->next;
+          ++steal_count;
+        }
+
+        kmem[i].freelist = tail->next;
+        tail->next = 0;
+
+        release(&kmem[i].lock);
+
+        if (r->next)
+        {
+          acquire(&kmem[id].lock);
+
+          tail->next = kmem[id].freelist; // 偷取的链表接在可能已被别的core塞入空闲页的freelist
+          kmem[id].freelist = r->next;
+
+          release(&kmem[id].lock);
+        }
+
+        memset((char *)r, 5, PGSIZE); // fill with junk
+        break;
+      }
+
+      // 该 CPU 为空, 没有偷到
+      release(&kmem[i].lock);
+    }
+  }
+
+  pop_off();
   return (void *)r;
 }
 
@@ -88,14 +152,18 @@ kfreemem(void)
   struct run *r;
   uint64 freemem = 0;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  while (r)
+  // 修改kmem之后，相应修改遍历的方式
+  for (int i = 0; i < NCPU; ++i)
   {
-    freemem += PGSIZE;
-    r = r->next;
+    acquire(&kmem[i].lock);
+    r = kmem[i].freelist;
+    while (r)
+    {
+      freemem += PGSIZE;
+      r = r->next;
+    }
+    release(&kmem[i].lock);
   }
-  release(&kmem.lock);
 
   return freemem;
 }
