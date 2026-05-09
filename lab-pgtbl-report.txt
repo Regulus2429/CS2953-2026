@@ -1,0 +1,26 @@
+5.9
+李徐砚
+speed up system calls
+这个任务的完成步骤在PPT中已经很详尽，在此说一下我实现时遇到的一些问题和犯的错误。
+首先，在 allocproc 中，分配物理页成功后清空页面的时候，memset的第一个参数是 p->usyscallpage，
+不需要取址（我之前照抄了后面的memset(&p->context, 0, sizeof(p->context))）。这是因为取址
+会把这个指针本身所在的内存给清零了，这不仅会丢失你刚刚分配的物理页的地址，还会破坏 proc 结构体
+里的其他数据。此外，后面的大小设置为 PGSIZE 即可，不要加 sizeof。
+然后在 allocproc 中分配物理页给usyscall的时机不能在p->pagetable = proc_pagetable(p) 之后，
+这是因为 proc_pagetble(p) 中执行 mappages 时要求 p->usyscallpage 已被分配（没被分配时为0）.
+我之前没有注意这个点，将分配物理页的时机随意地选取在了后面，就会在make qemu 时报错。
+此外，在proc_pagetable中，如果把usyscall的映射放在了最前面，记得在后面的TRAMPOLINE,TRAPFRAME
+映射错误的情况下加上 uvmunmap(pagetable, USYSCALL, 1, 0); 否则如果后续映射 TRAMPOLINE 或
+TRAPFRAME 失败，在销毁页表返回 0 之前，已经成功映射的 USYSCALL 没有解除映射，会发生内存泄漏。
+
+print a page table
+这个任务的步骤同样在PPT中非常详尽，而且可以参照freewalk实现，所以难度不大，实现的时候注意细节
+就可以。我犯的一个错误是
+printf("..%d: pte %p pa %p\n", i, (uint64)pte, pa); 时第一个数字 i 写错了。写代码的时候
+一定要保证头脑清醒。
+
+detect which pages have been accessed
+PPT中依旧详尽，需要实现的是 sysproc.c 中的 sys_pgaccess 函数。
+需要注意的细节是检查完 PTE_A 位设置后，需要将其清零，无论掩码中是否设置这一位。也就是说清零
+的代码放在 if 条件外面才是正确的。然后清零的公式在PPT中给出了，代入数值就可以，注意公式中
+1<<n 对应的不是 1<<i, 而是 PTE_A，然后最后的 a<<n 直接写为0就行了。
