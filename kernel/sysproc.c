@@ -78,6 +78,37 @@ sys_sleep(void)
 int sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
+  uint64 va = 0;
+  int check_num = 0;
+  uint64 buffer = 0;
+  unsigned int maskbits = 0; // 系统调用返回的掩码
+
+  argaddr(0, &va);
+  argint(1, &check_num);
+  argaddr(2, &buffer);
+
+  // 限制扫描页的最大数量（仍需测试）
+  if (check_num > 512)
+  {
+    return -1;
+  }
+
+  struct proc *p = myproc();
+  for (int i = 0; i < check_num; ++i)
+  {
+    uint64 cur_va = va + i * PGSIZE;
+    pte_t *pte = walk(p->pagetable, cur_va, PGSIZE);
+    // 这一面被访问过
+    if ((PTE_FLAGS(*pte) & PTE_A) != 0)
+    {
+      maskbits |= (1L << i);
+    }
+    *pte = ((*pte & PTE_A) ^ (*pte)) ^ 0; // 清零此 PTE_A 位
+  }
+
+  if (copyout(p->pagetable, buffer, (char *)&maskbits, sizeof(maskbits)) < 0)
+    return -1;
+
   return 0;
 }
 #endif

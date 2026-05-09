@@ -109,6 +109,7 @@ struct proc
   int alarm_ticks;                  // ticks have passed since the last call to handler
   int is_timer_going;               // 0 if is not running
   struct trapframe *prev_trapframe; // copy trapframe before timer runs
+  struct usyscall *usyscallpage;    // share page within kernel and user
 
   // wait_lock must be held when using this:
   struct proc *parent; // Parent process
