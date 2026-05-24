@@ -2,4 +2,5 @@
 # LAB=traps
 # LAB=thread
 # LAB=lock
-LAB=pgtbl
+# LAB=pgtbl
+LAB=cow
