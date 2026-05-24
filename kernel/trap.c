@@ -64,6 +64,77 @@ void usertrap(void)
 
     syscall();
   }
+  else if (r_scause() == 15)
+  {
+    // Store/AMO page fault, 在 lab cow 中实现，处理 cow 的 page fault
+    uint64 va = r_stval(); // 发生异常的虚拟地址
+    pte_t *pte;
+
+    if (va >= p->sz)
+    {
+      setkilled(p);
+      exit(-1);
+    }
+
+    va = PGROUNDDOWN(va); // 对齐
+
+    if (va >= p->sz)
+    {
+      setkilled(p);
+    }
+    else
+    {
+      if ((pte = walk(p->pagetable, va, 0)) == 0)
+      {
+        setkilled(p);
+      }
+      else
+      {
+        if (pte && (*pte & PTE_COW) && (*pte & PTE_V))
+        {
+          uint64 pa = PTE2PA(*pte);
+          uint flags = PTE_FLAGS(*pte);
+
+          if (get_ref_count((uint64)pa) == 1)
+          {
+            // 当前页面只有一个进程使用，无需创建新的页面
+            *pte = (*pte & ~PTE_COW) | PTE_W; // 直接修改权限位
+          }
+          else
+          {
+            char *mem;
+            if ((mem = kalloc()) == 0)
+            {
+              setkilled(p);
+              exit(-1);
+            }
+
+            memmove(mem, (char *)pa, PGSIZE);
+            flags = (flags & ~PTE_COW) | PTE_W;
+
+            // 移除旧的映射
+            uvmunmap(p->pagetable, va, 1, 0); // 最后一个参数表示不释放物理内存,还有别的页面使用
+
+            if (mappages(p->pagetable, va, PGSIZE, (uint64)mem, flags) != 0)
+            {
+              kfree(mem);
+              setkilled(p);
+            }
+            else
+            {
+              kfree((void *)pa);
+            }
+          }
+        }
+        else
+        {
+          // 要么是无效条目
+          // 要么是未设置 PTE_COW, 说明这原本就是个只读页, 杀死该进程
+          setkilled(p);
+        }
+      }
+    }
+  }
   else if ((which_dev = devintr()) != 0)
   {
     // ok

@@ -321,8 +321,8 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
+  // 原来的逻辑是按页遍历
   for (i = 0; i < sz; i += PGSIZE)
   {
     if ((pte = walk(old, i, 0)) == 0)
@@ -330,15 +330,22 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if ((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if ((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char *)pa, PGSIZE);
-    if (mappages(new, i, PGSIZE, (uint64)mem, flags) != 0)
+
+    // 在获取flags之前，先修改PTE_W(只有可写页需要标记cow，原本只读的内存共享之后还是只读，避免混淆)
+    if (*pte & PTE_W)
     {
-      kfree(mem);
+      *pte = (*pte & ~PTE_W) | PTE_COW;
+    }
+
+    flags = PTE_FLAGS(*pte);
+
+    if (mappages(new, i, PGSIZE, (uint64)pa, flags) != 0) // 建立新映射
+    {
       goto err;
     }
+
+    // 增加引用计数
+    incrref((uint64)pa);
   }
   return 0;
 
@@ -373,9 +380,47 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if (va0 >= MAXVA)
       return -1;
     pte = walk(pagetable, va0, 0);
+
+    // 对于COW的页需要提前判断处理，否则 PTE_W 不会被设置
+    if (pte && (*pte & PTE_V) && (*pte & PTE_U) && (*pte & PTE_COW))
+    {
+      uint64 pa = PTE2PA(*pte);
+      uint flags = PTE_FLAGS(*pte);
+
+      int count = get_ref_count(pa);
+      if (count == 1)
+      {
+        // 只有当前进程使用，无需分配新的页面
+        *pte = (*pte & ~PTE_COW) | PTE_W;
+      }
+      else
+      {
+        char *mem;
+        if ((mem = kalloc()) == 0)
+        {
+          return -1;
+        }
+
+        memmove(mem, (char *)pa, PGSIZE);
+        flags = (flags & ~PTE_COW) | PTE_W;
+
+        // 解除老映射，映射到新物理页
+        uvmunmap(pagetable, va0, 1, 0);
+        if (mappages(pagetable, va0, PGSIZE, (uint64)mem, flags) != 0)
+        {
+          kfree(mem);
+          return -1;
+        }
+
+        // 成功映射新页，老物理页引用计数减 1
+        kfree((void *)pa);
+      }
+    }
+
     if (pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
         (*pte & PTE_W) == 0)
       return -1;
+
     pa0 = PTE2PA(*pte);
     n = PGSIZE - (dstva - va0);
     if (n > len)

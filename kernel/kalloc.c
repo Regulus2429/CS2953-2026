@@ -14,6 +14,42 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
+int ref_count[PHYSTOP / PGSIZE]; // 每个页面的引用计数
+struct spinlock ref_lock;        // 维护引用计数的锁
+
+// 增加某个页的引用计数
+void incrref(uint64 pa)
+{
+  uint64 idx = (uint64)pa / PGSIZE;
+  acquire(&ref_lock);
+  if (ref_count[idx] < 0)
+  {
+    ref_count[idx] = 0;
+  }
+  ++ref_count[idx];
+  release(&ref_lock);
+}
+
+// 减少某个页的引用计数
+void decrref(uint64 pa)
+{
+  uint64 idx = (uint64)pa / PGSIZE;
+  acquire(&ref_lock);
+  --ref_count[idx];
+  release(&ref_lock);
+}
+
+// 获取某个页面的引用计数
+int get_ref_count(uint64 pa)
+{
+  uint64 idx = (uint64)pa / PGSIZE;
+  int res;
+  acquire(&ref_lock);
+  res = ref_count[idx];
+  release(&ref_lock);
+  return res;
+}
+
 struct run
 {
   struct run *next;
@@ -32,6 +68,10 @@ void kinit()
   {
     initlock(&kmem[i].lock, "kmem");
   }
+
+  // 对引用计数的锁初始化
+  initlock(&ref_lock, "ref_lock");
+
   // initlock(&kmem.lock, "kmem");
   freerange(end, (void *)PHYSTOP);
 }
@@ -55,20 +95,34 @@ void kfree(void *pa)
   if (((uint64)pa % PGSIZE) != 0 || (char *)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
+  acquire(&ref_lock);
+  uint64 idx = (uint64)pa / PGSIZE;
+  --ref_count[idx];
 
-  r = (struct run *)pa;
+  if (ref_count[idx] <= 0)
+  {
+    ref_count[idx] = 0;
+    release(&ref_lock); // 先释放ref_lock, 避免死锁
 
-  push_off();
-  int id = cpuid();
+    // Fill with junk to catch dangling refs.
+    memset(pa, 1, PGSIZE);
 
-  acquire(&kmem[id].lock);
-  r->next = kmem[id].freelist;
-  kmem[id].freelist = r;
-  release(&kmem[id].lock);
+    r = (struct run *)pa;
 
-  pop_off();
+    push_off();
+    int id = cpuid();
+
+    acquire(&kmem[id].lock);
+    r->next = kmem[id].freelist;
+    kmem[id].freelist = r;
+    release(&kmem[id].lock);
+
+    pop_off();
+  }
+  else
+  {
+    release(&ref_lock);
+  }
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -89,7 +143,14 @@ kalloc(void)
   release(&kmem[id].lock);
 
   if (r)
+  // 成功在自己的链表里拿到一页
+  {
     memset((char *)r, 5, PGSIZE); // fill with junk
+
+    acquire(&ref_lock);
+    ref_count[(uint64)r / PGSIZE] = 1;
+    release(&ref_lock);
+  }
   else
   {
     // 尝试别的 cpu 的freelist
@@ -121,17 +182,29 @@ kalloc(void)
 
         release(&kmem[i].lock);
 
-        if (r->next)
+        // 此时 r 到 tail 这串页已经被垄断了，外界碰不到
+        // 在把它们放进自己的 freelist 之前，立刻把这一串页的引用计数全部初始化为 1！
+        acquire(&ref_lock);
+        struct run *curr = r;
+        while (curr)
+        {
+          ref_count[(uint64)curr / PGSIZE] = 1;
+          curr = curr->next;
+        }
+        release(&ref_lock);
+
+        struct run *next_pages = r->next;
+        memset((char *)r, 5, PGSIZE); // fill with junk
+
+        if (next_pages)
         {
           acquire(&kmem[id].lock);
 
           tail->next = kmem[id].freelist; // 偷取的链表接在可能已被别的core塞入空闲页的freelist
-          kmem[id].freelist = r->next;
+          kmem[id].freelist = next_pages;
 
           release(&kmem[id].lock);
         }
-
-        memset((char *)r, 5, PGSIZE); // fill with junk
         break;
       }
 
@@ -141,6 +214,7 @@ kalloc(void)
   }
 
   pop_off();
+
   return (void *)r;
 }
 
