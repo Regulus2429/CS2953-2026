@@ -1,0 +1,60 @@
+5.24
+李徐砚
+
+这次的lab虽然只有一个任务，但是这个任务细节很多，完成的过程出现了许多问题的。
+首先，在lab.mk修改之后编译会报错，原因在于kernel/memlayout.h中
+#ifdef LAB_PGTBL  // ← 下一个 Lab 编译时，这个宏失效了
+#define USYSCALL (TRAPFRAME - PGSIZE)
+struct usyscall {
+  int pid;  
+};
+#endif
+注释掉ifdef和endif即可。还需要注意的是kernel/memlayout.h会被 trampoline.S包含，但是汇编器
+只认识宏定义，不认识struct usyscall，所以需要用#ifndef __ASSEMBLER__（如果不是汇编器）来包裹
+结构体，这样结构体就只对 C 语言代码可见，而对汇编代码隐形。
+
+然后在实现kalloc的时候，由于需要锁管理引用计数，我添加了一个 ref_lock 自旋锁。在修改kalloc
+和 kfree 的过程中，如果连续获取锁，就可能出现死锁。我最早的实现中就有死锁的可能，修正的方式就是
+尽量在释放掉上一个锁之后再获取下一个锁（我目前的实现中应该没有连续获取锁），从而避免死锁。还需要
+注意的是之前在lab-lock中实现的Memory Allocator需要从别的CPU偷页，偷页的时候引用计数必须安全
+的设置，我之前的设计中就存在引用计数混乱的问题（就是在某些情况下没有正确维护引用计数），我觉得
+一种比较安全的方式是只要某个页离开了freelist链表,就立刻修改ref_count，而不是等到代码的最后再去
+修改（这样在这个页又被别的CPU偷走的时候可能会出问题）。
+
+再然后就是 trap.c 中的 usertrap 函数。讲一下我先前忽略掉的细节，首先，在usertrap的开头r_stval()
+获取的 va 需要对齐，可以使用 riscv.h 中的 PGROUNDDOWN, 否则测试时可能会报错
+panic: uvmunmap: not aligned 。然后，在建立新映射之前，需要移除旧的映射，调用 memmove 即可。
+还有个技巧是，不要发现COW就盲目创建新页面分配新内存，可以先获取当前页面的引用计数，如果计数为1，
+没有必要分配新内存，直接修改当前页面的标志位后继续使用该页即可。这种情况发生的一个可能情形是，
+子进程在和父进程共享页面之后写了某页，于是获取了一个新页作为这个页的副本。如果后面父进程也
+需要修改这个页面，就不会再分配新页释放旧页，而是直接使用旧页。
+
+copyout的逻辑和usertrap基本是一样的，额外需要说的就是必须在原有代码
+if (pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
+        (*pte & PTE_W) == 0)
+    return -1;
+之前添加 cow 的逻辑，因为某些可写页因为cow被设置为了只读，通过不了这个判断。
+
+make grade 输出结果如下：
+make[1]: Leaving directory '/home/lxy/CS2953/CS2953-2024'
+== Test running cowtest == 
+$ make qemu-gdb
+(4.5s) 
+== Test   simple == 
+  simple: OK 
+== Test   three == 
+  three: OK 
+== Test   file == 
+  file: OK 
+== Test usertests == 
+$ make qemu-gdb
+(30.7s) 
+== Test   usertests: copyin == 
+  usertests: copyin: OK 
+== Test   usertests: copyout == 
+  usertests: copyout: OK 
+== Test   usertests: all tests == 
+  usertests: all tests: OK 
+== Test lab-cow-report.txt == 
+lab-cow-report.txt: OK 
+Score: 114/114
