@@ -31,6 +31,7 @@ int trace(int);
 int sysinfo(struct sysinfo *);
 int sigalarm(int ticks, void (*handler)());
 int sigreturn(void);
+int symlink(char *, char *); // created in lab-fs
 #ifdef LAB_NET
 int connect(uint32, uint16, uint16);
 #endif
