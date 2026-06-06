@@ -1,0 +1,53 @@
+6.6
+李徐砚
+
+这次lab分为两个任务, 整体上难度不大，实现的时候没有复杂的逻辑，下面说一下我完成两个任务时出现的一些细节问题。
+第一个任务就是通过加入二级块，来支持更大的文件。当修改NDIRECT的时候，需要同时修改inode和dinode中addrs成员的
+大小，保持总大小不变。然后MAXFILE也需要随之加上二级块的存储大小。然后再bmap函数中加入二级块的逻辑时，技巧就是
+看懂原来一级块的实现，然后直接按照一级块的模板来完成，这样就只需要关注索引的变化（比如bn改成bn/NINDIRECT之类
+的）。唯一需要额外说的就是bmap中分配失败的时候也必须显式地释放bp，如果你在没有调用 brelse(bp) 的情况下直接
+return 0，这个缓冲区就会永远处于被锁定状态。当后续其他进程（或者当前进程下一次）尝试访问该磁盘块时，会因为
+拿不到锁而永远卡死在 bread 里。最后，不要忘记修改itrunc, 实现的时候仿照一级块在内层再套一层循环即可，并不困难。
+
+第二个任务是加入 symlink 的系统调用，最开始的准备工作在hint中已经给出，之前的lab中也出现多次，不再赘述。
+sysfile.c中直接上手实现sys_symlink可能比较困难，技巧是先读一读sys_open中创建文件的代码，这一段的代码几乎可以
+照抄，注意保持xv6的日志机制，也就是begin_op,end_op。然后在往inode里写的时候，即使writei失败也需要调用
+iunlockput，否则这个 Inode 的锁就永远不会被释放，引用计数也不会减少。这会导致后续任何尝试访问该文件或相关目录
+的进程永久卡死。总结一下，只要你持有了某个 Inode（通过 create、namei 或 ilock），在系统调用结束前，你必须用
+iunlockput（或对应的解锁、放回函数）把它的状态复原，交还给系统。最后增加sys_open对symlink支持的时候，注意必须
+先 iunlockput(ip) 再调用 namei(target)。因为namei() 会从根目录或当前目录开始，逐层查找路径中的每一个目录和
+文件。如果你的目标路径 target 包含当前这个软链接所在的目录，而你此时还拿着当前软链接的锁（ip 处于 locked 状态
+），namei 在扫描目录时可能会再次尝试去获取这个 ip 的锁。一个线程试图去获取一个自己已经持有的睡眠锁，就会导致整
+个系统永久卡死。实现完别忘了把symlink加入makefile，否则测试会出现exec symlinktest failed的报错。
+
+最后 make grade 的时候，可能会出现如下报错：
+make[1]: Leaving directory '/home/lxy/CS2953/CS2953-2024'
+== Test running bigfile == Traceback (most recent call last):
+  File "/home/lxy/CS2953/CS2953-2024/./grade-lab-fs", line 42, in <module>
+    run_tests()
+    ~~~~~~~~~^^
+  File "/home/lxy/CS2953/CS2953-2024/gradelib.py", line 136, in run_tests
+    test()
+    ~~~~^^
+  File "/home/lxy/CS2953/CS2953-2024/gradelib.py", line 56, in run_test
+    fn()
+    ~~^^
+  File "/home/lxy/CS2953/CS2953-2024/./grade-lab-fs", line 10, in test_bigfile
+    r.run_qemu(shell_script([
+    ~~~~~~~~~~^^^^^^^^^^^^^^^
+        'bigfile'
+        ^^^^^^^^^
+    ]), timeout=180)
+    ^^^^^^^^^^^^^^^^
+  File "/home/lxy/CS2953/CS2953-2024/gradelib.py", line 451, in run_qemu
+    self.qemu = QEMU(target_base + "-gdb", *make_args)
+                ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lxy/CS2953/CS2953-2024/gradelib.py", line 311, in __init__
+    show_command(("make",) + make_args)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lxy/CS2953/CS2953-2024/gradelib.py", line 241, in show_command
+    from pipes import quote
+ModuleNotFoundError: No module named 'pipes'
+其实不是代码实现的问题，而是课程提供的 Python 评测脚本（gradelib.py）比较老。在旧版本的 Python 中，pipes 是
+一个内置模块。但随着 Python 的升级，pipes 模块在 Python 3.11 中被标记为废弃，并在 Python 3.13 中被正式
+彻底移除。所以，切换到一个旧版本的python即可，比如 python 3.10.
