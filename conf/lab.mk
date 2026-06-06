@@ -3,4 +3,5 @@
 # LAB=thread
 # LAB=lock
 # LAB=pgtbl
-LAB=cow
+# LAB=cow
+LAB=fs
